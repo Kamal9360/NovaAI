@@ -7,10 +7,11 @@ const app = express();
 
 const PORT = process.env.PORT || 5000;
 const MODEL = process.env.OLLAMA_MODEL || "qwen2.5:1.5b";
-
 const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || "http://localhost:11434"
 ).replace(/\/+$/, "");
+
+const PROXY_TOKEN = process.env.NOVA_PROXY_TOKEN;
 
 const allowedOrigins = [
   "http://localhost:5173",
@@ -20,11 +21,9 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, callback) {
-      // Allow requests without an Origin header, such as local health checks.
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-
       return callback(new Error("Origin not allowed by CORS"));
     },
   })
@@ -38,29 +37,47 @@ app.get("/", (req, res) => {
 
 app.get("/api/health", async (req, res) => {
   try {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`);
+    if (!PROXY_TOKEN) {
+      return res.status(500).json({
+        status: "disconnected",
+        message: "Proxy token is not configured",
+      });
+    }
+
+    const response = await fetch(`${OLLAMA_BASE_URL}/health`, {
+      headers: {
+        Authorization: `Bearer ${PROXY_TOKEN}`,
+      },
+      signal: AbortSignal.timeout(15000),
+    });
 
     if (!response.ok) {
       return res.status(503).json({
         status: "disconnected",
-        message: "Ollama is unavailable",
+        message: "Local AI proxy is unavailable",
       });
     }
 
-    res.json({
+    return res.json({
       status: "connected",
-      message: "Backend and Ollama are available",
+      message: "Backend and local AI proxy are available",
     });
   } catch {
-    res.status(503).json({
+    return res.status(503).json({
       status: "disconnected",
-      message: "Cannot connect to Ollama",
+      message: "Cannot connect to the local AI proxy",
     });
   }
 });
 
 app.post("/api/chat", async (req, res) => {
   try {
+    if (!PROXY_TOKEN) {
+      return res.status(500).json({
+        error: "AI proxy token is not configured.",
+      });
+    }
+
     const { messages } = req.body ?? {};
 
     if (
@@ -90,7 +107,10 @@ app.post("/api/chat", async (req, res) => {
 
     const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${PROXY_TOKEN}`,
+      },
       body: JSON.stringify({
         model: MODEL,
         messages: [
@@ -104,11 +124,11 @@ app.post("/api/chat", async (req, res) => {
         ],
         stream: false,
       }),
+      signal: AbortSignal.timeout(130000),
     });
 
     if (!response.ok) {
-      console.error("Ollama error:", await response.text());
-
+      console.error("AI proxy returned status:", response.status);
       return res.status(502).json({
         error: "The AI service returned an error.",
       });
@@ -116,13 +136,13 @@ app.post("/api/chat", async (req, res) => {
 
     const data = await response.json();
 
-    res.json({
-      reply: data.message?.content || "No response received.",
+    return res.json({
+      reply: data.reply || "No response received.",
     });
   } catch (error) {
     console.error("NovaAI error:", error.message);
 
-    res.status(502).json({
+    return res.status(502).json({
       error: "Could not connect to the AI service.",
     });
   }
