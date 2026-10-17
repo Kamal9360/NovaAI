@@ -1,9 +1,12 @@
+
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
 import { useState, useRef, useEffect } from "react";
 import "./App.css";
+
+const API_URL = "https://novaai-backend-ak7s.onrender.com/api/chat";
 
 const suggestions = [
   {
@@ -28,72 +31,49 @@ const suggestions = [
   },
 ];
 
+async function requestNovaAI(messages) {
+  const response = await fetch(API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messages: messages.map(({ role, content }) => ({
+        role,
+        content,
+      })),
+    }),
+  });
+
+  const contentType = response.headers.get("content-type") || "";
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `The backend returned a non-JSON response (HTTP ${response.status}). Check the Render deployment and API URL.`
+    );
+  }
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data.error || `NovaAI request failed (HTTP ${response.status}).`
+    );
+  }
+
+  if (typeof data.reply !== "string" || !data.reply.trim()) {
+    throw new Error("NovaAI returned an empty response. Please try again.");
+  }
+
+  return data.reply;
+}
+
 function App() {
   const [isListening, setIsListening] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
-const [speakingMessage, setSpeakingMessage] = useState(null);
+  const [speakingMessage, setSpeakingMessage] = useState(null);
 
-const speakMessage = (text, messageId) => {
-  if (!("speechSynthesis" in window)) {
-    alert("Speech is not supported in this browser.");
-    return;
-  }
-
-  if (speakingMessage === messageId) {
-    window.speechSynthesis.cancel();
-    setSpeakingMessage(null);
-    return;
-  }
-
-  window.speechSynthesis.cancel();
-
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "en-IN";
-  utterance.rate = 1;
-  utterance.pitch = 1;
-
-  utterance.onend = () => setSpeakingMessage(null);
-  utterance.onerror = () => setSpeakingMessage(null);
-
-  setSpeakingMessage(messageId);
-  window.speechSynthesis.speak(utterance);
-};
-
-const startVoiceInput = () => {
-  const SpeechRecognition =
-    window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  if (!SpeechRecognition) {
-    alert("Voice input is not supported in this browser. Try Chrome or Edge.");
-    return;
-  }
-
-  const recognition = new SpeechRecognition();
-  recognition.lang = "en-IN";
-  recognition.continuous = false;
-  recognition.interimResults = false;
-
-  recognition.onstart = () => setIsListening(true);
-
-  recognition.onresult = (event) => {
-    const transcript = event.results[0][0].transcript;
-
-    setInput((previous) =>
-      previous ? `${previous} ${transcript}` : transcript
-    );
-  };
-
-  recognition.onerror = () => {
-    setIsListening(false);
-  };
-
-  recognition.onend = () => {
-    setIsListening(false);
-  };
-
-  recognition.start();
-};
   const [chats, setChats] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("novaai-chats") || "[]");
@@ -101,24 +81,27 @@ const startVoiceInput = () => {
       return [];
     }
   });
-const [searchQuery, setSearchQuery] = useState("");
-const filteredChats = chats.filter((chat) => {
-  const query = searchQuery.toLowerCase().trim();
 
-  if (!query) return true;
+  const [searchQuery, setSearchQuery] = useState("");
 
-  const titleMatches = (chat.title || "")
-    .toLowerCase()
-    .includes(query);
+  const filteredChats = chats.filter((chat) => {
+    const query = searchQuery.toLowerCase().trim();
 
-  const messageMatches = (chat.messages || []).some((message) =>
-    (message.content || message.text || "")
+    if (!query) return true;
+
+    const titleMatches = (chat.title || "")
       .toLowerCase()
-      .includes(query)
-  );
+      .includes(query);
 
-  return titleMatches || messageMatches;
-});
+    const messageMatches = (chat.messages || []).some((message) =>
+      (message.content || message.text || "")
+        .toLowerCase()
+        .includes(query)
+    );
+
+    return titleMatches || messageMatches;
+  });
+
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem("novaai-theme") || "dark";
@@ -156,6 +139,62 @@ const filteredChats = chats.filter((chat) => {
     }
   }, [theme]);
 
+  function speakMessage(text, messageId) {
+    if (!("speechSynthesis" in window)) {
+      alert("Speech is not supported in this browser.");
+      return;
+    }
+
+    if (speakingMessage === messageId) {
+      window.speechSynthesis.cancel();
+      setSpeakingMessage(null);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "en-IN";
+    utterance.rate = 1;
+    utterance.pitch = 1;
+
+    utterance.onend = () => setSpeakingMessage(null);
+    utterance.onerror = () => setSpeakingMessage(null);
+
+    setSpeakingMessage(messageId);
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function startVoiceInput() {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert("Voice input is not supported in this browser. Try Chrome or Edge.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-IN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setIsListening(true);
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+
+      setInput((previous) =>
+        previous ? `${previous} ${transcript}` : transcript
+      );
+    };
+
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+
+    recognition.start();
+  }
+
   function toggleTheme() {
     setTheme((current) => (current === "dark" ? "light" : "dark"));
   }
@@ -168,6 +207,22 @@ const filteredChats = chats.filter((chat) => {
     setActiveChat(null);
     setError("");
     inputRef.current?.focus();
+  }
+
+  function saveChat(chatId, question, updatedMessages) {
+    setChats((previous) => {
+      const chat = {
+        id: chatId,
+        title: question.slice(0, 30),
+        messages: updatedMessages,
+      };
+
+      const exists = previous.some((item) => item.id === chatId);
+
+      return exists
+        ? previous.map((item) => (item.id === chatId ? chat : item))
+        : [chat, ...previous];
+    });
   }
 
   async function sendMessage(text = input) {
@@ -191,55 +246,19 @@ const filteredChats = chats.filter((chat) => {
     setError("");
 
     try {
-      const response = await fetch("http://localhost:5000/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: conversation.map(({ role, content }) => ({
-            role,
-            content,
-          })),
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.error || "Unable to get a response from NovaAI."
-        );
-      }
-
-      if (typeof data.reply !== "string" || !data.reply.trim()) {
-        throw new Error("NovaAI returned an empty response. Please try again.");
-      }
+      const reply = await requestNovaAI(conversation);
 
       const updated = [
         ...conversation,
         {
           id: Date.now() + 1,
           role: "assistant",
-          content: data.reply,
+          content: reply,
         },
       ];
 
       setMessages(updated);
-
-      setChats((previous) => {
-        const chat = {
-          id: chatId,
-          title: question.slice(0, 30),
-          messages: updated,
-        };
-
-        const exists = previous.some((item) => item.id === chatId);
-
-        return exists
-          ? previous.map((item) => (item.id === chatId ? chat : item))
-          : [chat, ...previous];
-      });
+      saveChat(chatId, question, updated);
     } catch (err) {
       console.error("NovaAI chat error:", err);
 
@@ -247,19 +266,7 @@ const filteredChats = chats.filter((chat) => {
         err.message || "Unable to connect to NovaAI. Please check your backend."
       );
 
-      setChats((previous) => {
-        const chat = {
-          id: chatId,
-          title: question.slice(0, 30),
-          messages: conversation,
-        };
-
-        const exists = previous.some((item) => item.id === chatId);
-
-        return exists
-          ? previous.map((item) => (item.id === chatId ? chat : item))
-          : [chat, ...previous];
-      });
+      saveChat(chatId, question, conversation);
     } finally {
       setLoading(false);
     }
@@ -289,60 +296,22 @@ const filteredChats = chats.filter((chat) => {
     setError("");
 
     try {
-      const response = await fetch("https://novaai-backend-ak7s.onrender.com", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: conversation.map(({ role, content }) => ({
-            role,
-            content,
-          })),
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.error || "Unable to get a response from NovaAI."
-        );
-      }
-
-      if (typeof data.reply !== "string" || !data.reply.trim()) {
-        throw new Error("NovaAI returned an empty response. Please try again.");
-      }
+      const reply = await requestNovaAI(conversation);
 
       const updated = [
         ...conversation,
         {
           id: Date.now() + 1,
           role: "assistant",
-          content: data.reply,
+          content: reply,
         },
       ];
 
       setMessages(updated);
-
-      setChats((previous) => {
-        const chat = {
-          id: chatId,
-          title: lastQuestion.slice(0, 30),
-          messages: updated,
-        };
-
-        const exists = previous.some((item) => item.id === chatId);
-
-        return exists
-          ? previous.map((item) => (item.id === chatId ? chat : item))
-          : [chat, ...previous];
-      });
+      saveChat(chatId, lastQuestion, updated);
     } catch (err) {
       console.error("NovaAI retry error:", err);
-      setError(
-        err.message || "Retry failed. Please check that Ollama is running."
-      );
+      setError(err.message || "Retry failed. Please check your backend.");
     } finally {
       setLoading(false);
     }
@@ -372,55 +341,19 @@ const filteredChats = chats.filter((chat) => {
     setError("");
 
     try {
-      const response = await fetch("http://localhost:5000/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: conversation.map(({ role, content }) => ({
-            role,
-            content,
-          })),
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.error || "Unable to regenerate the response."
-        );
-      }
-
-      if (typeof data.reply !== "string" || !data.reply.trim()) {
-        throw new Error("NovaAI returned an empty response. Please try again.");
-      }
+      const reply = await requestNovaAI(conversation);
 
       const updatedMessages = [
         ...previousMessages,
         {
           id: Date.now() + 1,
           role: "assistant",
-          content: data.reply,
+          content: reply,
         },
       ];
 
       setMessages(updatedMessages);
-
-      setChats((previous) => {
-        const chat = {
-          id: chatId,
-          title: lastQuestion.slice(0, 30),
-          messages: updatedMessages,
-        };
-
-        const exists = previous.some((item) => item.id === chatId);
-
-        return exists
-          ? previous.map((item) => (item.id === chatId ? chat : item))
-          : [chat, ...previous];
-      });
+      saveChat(chatId, lastQuestion, updatedMessages);
     } catch (err) {
       console.error("NovaAI regenerate error:", err);
       setError(err.message || "Could not regenerate the response.");
@@ -546,31 +479,33 @@ const filteredChats = chats.filter((chat) => {
 
           <div className="sidebar-label">YOUR WORKSPACE</div>
 
-<div className="chat-search">
-  <span>⌕</span>
-  <input
-    type="search"
-    placeholder="Search conversations..."
-    value={searchQuery}
-    onChange={(event) => setSearchQuery(event.target.value)}
-    aria-label="Search conversations"
-  />
-  {searchQuery && (
-    <button
-      type="button"
-      onClick={() => setSearchQuery("")}
-      aria-label="Clear search"
-    >
-      ×
-    </button>
-  )}
-</div>
+          <div className="chat-search">
+            <span>⌕</span>
+            <input
+              type="search"
+              placeholder="Search conversations..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              aria-label="Search conversations"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                aria-label="Clear search"
+              >
+                ×
+              </button>
+            )}
+          </div>
 
           <div className="history-list">
             {chats.length === 0 ? (
               <p className="empty-history">
                 Your conversations will appear here.
               </p>
+            ) : filteredChats.length === 0 ? (
+              <p className="empty-history">No matching conversations.</p>
             ) : (
               filteredChats.map((chat) => (
                 <div
@@ -649,9 +584,7 @@ const filteredChats = chats.filter((chat) => {
               title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
             >
               {theme === "dark" ? "☀️" : "🌙"}
-              <span>
-                {theme === "dark" ? "Light mode" : "Dark mode"}
-              </span>
+              <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
             </button>
 
             <button
@@ -731,39 +664,35 @@ const filteredChats = chats.filter((chat) => {
                     </div>
 
                     <div className="message-text markdown-content">
-  <ReactMarkdown
-    remarkPlugins={[remarkGfm]}
-    rehypePlugins={[rehypeHighlight]}
-  >
-    {message.content || ""}
-  </ReactMarkdown>
-</div>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeHighlight]}
+                      >
+                        {message.content || ""}
+                      </ReactMarkdown>
+                    </div>
 
                     {message.role === "assistant" && (
                       <div className="message-actions">
-                        
-<button
-  type="button"
-  className="message-action"
-  onClick={() =>
-    speakMessage(
-      message.content,
-      message.id
-    )
-  }
-  title={
-    speakingMessage === message.id
-      ? "Stop speaking"
-      : "Read aloud"
-  }
-  aria-label={
-    speakingMessage === message.id
-      ? "Stop speaking"
-      : "Read aloud"
-  }
->
-  {speakingMessage === message.id ? "⏹️" : "🔊"}
-</button>
+                        <button
+                          type="button"
+                          className="message-action"
+                          onClick={() =>
+                            speakMessage(message.content, message.id)
+                          }
+                          title={
+                            speakingMessage === message.id
+                              ? "Stop speaking"
+                              : "Read aloud"
+                          }
+                          aria-label={
+                            speakingMessage === message.id
+                              ? "Stop speaking"
+                              : "Read aloud"
+                          }
+                        >
+                          {speakingMessage === message.id ? "⏹️" : "🔊"}
+                        </button>
 
                         <button
                           type="button"
@@ -849,35 +778,33 @@ const filteredChats = chats.filter((chat) => {
               disabled={loading}
             />
 
-            
-<div className="composer-bottom">
-  <span className="composer-hint">
-    <span className="sparkle-small">✦</span>{" "}
-    {loading ? "NovaAI is thinking..." : "Curious minds welcome"}
-  </span>
+            <div className="composer-bottom">
+              <span className="composer-hint">
+                <span className="sparkle-small">✦</span>{" "}
+                {loading ? "NovaAI is thinking..." : "Curious minds welcome"}
+              </span>
 
-  <div className="composer-actions">
-    <button
-      type="button"
-      className={`voice-button ${isListening ? "listening" : ""}`}
-      onClick={startVoiceInput}
-      title="Speak your message"
-      aria-label="Speak your message"
-    >
-      {isListening ? "🔴" : "🎤"}
-    </button>
+              <div className="composer-actions">
+                <button
+                  type="button"
+                  className={`voice-button ${isListening ? "listening" : ""}`}
+                  onClick={startVoiceInput}
+                  title="Speak your message"
+                  aria-label="Speak your message"
+                >
+                  {isListening ? "🔴" : "🎤"}
+                </button>
 
-    <button
-      type="submit"
-      className="send-button"
-      disabled={!input.trim() || loading}
-      aria-label="Send message"
-    >
-      {loading ? "…" : "↑"}
-    </button>
-  </div>
-</div>
-
+                <button
+                  type="submit"
+                  className="send-button"
+                  disabled={!input.trim() || loading}
+                  aria-label="Send message"
+                >
+                  {loading ? "…" : "↑"}
+                </button>
+              </div>
+            </div>
           </form>
 
           <p className="disclaimer">
